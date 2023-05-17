@@ -1,0 +1,139 @@
+<pre>
+  BIP: ?
+  Layer: Applications
+  Title: Intergrate EVM To Bitcoin
+  Author: Robins Dan
+  Comments-Summary: No comments yet.
+  Comments-URI: 
+  Status: Draft
+  Type: Informational
+  Created: 2023-05-02
+  License: PD
+</pre>
+
+== Introduction ==
+
+=== Abstract ===
+
+This document defines a scheme for adding an EVM execution layer to Bitcoin.
+
+=== Copyright ===
+
+This work is placed in the public domain.
+
+=== Motivation ===
+
+Bitcoin has a builtin scripting language. The simplicity of the Bitcoin scripting language is well-suited for simple transactions and basic smart contract functionality, but also means that it has limited functionality compared to other smart contract platforms like Ethereum. This can limit the types of applications that can be built on the Bitcoin network.
+
+And the Segregated Witness (SegWit) protocol upgrade in the Bitcoin network separates the transaction signatures (witness data) from the transaction data. This increases the capacity of the Bitcoin network and reduces transaction fees a lot.
+
+This proposal is motivated by the desire to provide a EVM execution application layer to Bitcoin. Users can invoke EVM smart contract derectly in Bitcoin network.
+
+== Description ==
+
+=== Design ===
+
+To reduce the transaction fees, the Segregated Witness protocol is used.
+Users can use a special P2WSH address to send bitcoin transaction,
+and the EVM invoke transaction data is encoded in witness data.
+And the special redeem script will first drop the invoke data from the witness data stack, and then behave like a normal
+redeem script.
+
+Comparing to the [https://github.com/casey/ord/blob/master/bip.mediawiki Ordinals protocol],
+which encode data in the script directly, and need one commit and one reveal transaction,
+our protocol can make the P2WSH address stable, and reveal the data directly in one transaction.
+This will make it more user friendly.
+
+=== Specification ===
+
+==== EVM Address ====
+The redemm script hash is 32 bytes, while the evm address is 20 bytes.
+To be compatible with the existing ecosystem of Ethereum, We take the ripemd160 of script hash as the evm address.
+<pre>
+type Address [20]byte
+
+func AddressFromP2WESH(scriptHash [32]byte) Address {
+	return ripemd160(scriptHash)
+}
+</pre>
+
+==== EVM Data Format ====
+
+There are two types of EVM invoke action: EVM call and EVM deploy.
+
+<pre>
+type EVMCall {
+	From Address
+	To Address
+	Data []byte
+}
+
+type EVMDeploy {
+	From Address
+	Data []byte
+}
+
+func EVMCallToWitness(call EVMCall) [][]byte {
+	encoded := concat("evmc", call.To[:], call.Data[:])
+	return EncodeToWitness(encoded)
+}
+
+func EVMDeployToWitness(deploy EVMDeploy) [][]byte {
+	encoded :=  concat("evmd", deploy.Data[:])
+	return EncodeToWitness(encoded)
+}
+
+func EncodeToWitness(encoded []byte) [][]byte {
+	var witness [][]byte
+	for len(encoded) > 520 {
+		witness = append(witness, encoded[:520])
+		encoded = encoded[520:]
+	}
+	if len(encoded) > 0 {
+		witness = append(witness, encoded)
+	}
+
+	return witness
+}
+</pre>
+
+==== EVM P2WSH ====
+
+The redeem script for EVM is a normal redeem script with some `DROP` opcodes appended to it.
+
+The following example is an EVM enabled version 0 pay-to-witness-script-hash (P2WSH).
+    witness:      0 <signature> <evmcall0> <evmcall1> <2DROP <pubkey> CHECKSIG>
+    scriptSig:    (empty)
+    scriptPubKey: 0 <32-byte-hash>
+                  (0x0020{32-byte-hash})
+
+The following example is an EVM enabled 1-of-2 multi-signature version 0 pay-to-witness-script-hash (P2WSH).
+
+    witness:      0 <signature1> <evmcall0> <evmcall1> <evmcall2> <2DROP DROP 1 <pubkey1> <pubkey2> 2 CHECKMULTISIG>
+    scriptSig:    (empty)
+    scriptPubKey: 0 <32-byte-hash>
+                  (0x0020{32-byte-hash})
+
+==== EVM Execution ====
+
+No extra fee is needed to do the EVM execution, to avoid DDOS attack, the execution gas is limited to 10000000.
+
+=== Terminology and Notation ===
+
+== Discussion ==
+
+=== Rationale ===
+
+This protocol is designed to be orthogonal to other aspects of the Bitcoin
+protocol, and can thus be used in conjunction with other layer one and layer
+applications.
+
+It requires no changes to blocks, transactions, or network protocols, and
+can thus be immediately adopted, or ignored, without impacting existing users.
+
+=== Backward compatibility ===
+
+This protocol is fully backwards compatible and require no changes to the
+bitcoin network.
+
+=== Drawbacks ===
